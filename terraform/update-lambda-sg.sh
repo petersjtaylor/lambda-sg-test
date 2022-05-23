@@ -6,8 +6,11 @@ VPC_ID=$1
 # source security group that we will remove from enis
 SOURCE_SG_ID=$2
 
-# create Temporary SG
-tempSG=$(aws ec2 create-security-group --description "Temp SG" --group-name "Temp-SG" | jq -r '.GroupId')
+TARGET_SG_ID=$(aws ec2 describe-security-groups \
+    --filters Name=description,Values='default VPC security group' \
+    Name=vpc-id,Values=${VPC_ID} \
+    --output text \
+    --query 'SecurityGroups[0].GroupId')
 
 # Get ENI's from source SG
 enis=$(aws ec2 describe-network-interfaces \
@@ -17,12 +20,7 @@ enis=$(aws ec2 describe-network-interfaces \
 
 # Assign eni's to temporary SG
 for item in ${enis}; do
-  aws ec2 modify-network-interface-attribute --network-interface-id ${item} --groups ${tempSG}
+  aws ec2 modify-network-interface-attribute --network-interface-id ${item} --groups ${TARGET_SG_ID}
 done
 
-echo detached ${enis} from ${SOURCE_SG_ID} to ${tempSG}
-
-# Delete Temporary SG
-echo "Deleting temporary SG ${tempSG}"
-
-aws ec2 delete-security-group --group-id ${tempSG}
+echo detached ${enis} from ${SOURCE_SG_ID} and attached to ${TARGET_SG_ID}

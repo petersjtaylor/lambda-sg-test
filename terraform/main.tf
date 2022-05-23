@@ -55,7 +55,9 @@ resource "aws_lambda_function" "lambda_function" {
 }
 
 resource "aws_vpc" "vpc" {
-  cidr_block = var.vpc_cidr_block
+  cidr_block           = var.vpc_cidr_block
+  enable_dns_support   = true
+  enable_dns_hostnames = true
   tags = {
     Name = "${var.project}-vpc"
   }
@@ -178,6 +180,20 @@ resource "aws_security_group" "security_group" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 2049
+    to_port     = 2049
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -198,5 +214,79 @@ resource "null_resource" "reassign_EIP" {
   provisioner "local-exec" {
     when    = destroy
     command = "bash ./update-lambda-sg.sh ${self.triggers.vpc_id} ${self.triggers.sg}"
+  }
+}
+
+resource "tls_private_key" "node_key" {
+  algorithm = "RSA"
+}
+
+resource "aws_key_pair" "key_pair" {
+  key_name = "efs-key"
+  public_key = tls_private_key.node_key.public_key_openssh
+}
+
+resource "null_resource" "save_key_pair" {
+  provisioner "local-exec" {
+    command = "echo '${tls_private_key.node_key.private_key_pem}' > node.pem"
+  }
+}
+
+# Public EC2 instance
+resource "aws_instance" "bastion" {
+  ami                    = "ami-0d729d2846a86a9e7"
+  instance_type          = "t2.micro"
+  key_name               = aws_key_pair.key_pair.key_name
+  subnet_id              = aws_subnet.subnet_public.id
+  vpc_security_group_ids = [aws_security_group.security_group.id]
+  tags = {
+    Name = "Bastion"
+  }
+
+  provisioner "local-exec" {
+    command = "echo '${aws_instance.bastion.public_ip}' > publicIP.txt"
+  }
+}
+# EC2 instance
+resource "aws_instance" "node" {
+  ami                    = "ami-0d729d2846a86a9e7"
+  instance_type          = "t2.micro"
+  key_name               = aws_key_pair.key_pair.key_name
+  subnet_id              = aws_subnet.subnet_private.id
+  vpc_security_group_ids = [aws_security_group.security_group.id]
+  tags = {
+    Name = "Node"
+  }
+
+}
+
+resource "aws_efs_file_system" "efs" {
+  creation_token = "ec2-efs"
+  tags = {
+    Name = "EFS Volume"
+  }
+}
+
+resource "aws_efs_mount_target" "mount" {
+  depends_on      = [aws_efs_file_system.efs]
+  file_system_id  = aws_efs_file_system.efs.id
+  subnet_id       = aws_instance.bastion.subnet_id
+  security_groups = [aws_security_group.security_group.id]
+}
+
+resource "null_resource" "configure_nfs" {
+  depends_on = [aws_efs_mount_target.mount]
+  connection {
+    type        = "ssh"
+    user        = "ec2-user"
+    private_key = tls_private_key.node_key.private_key_pem
+    host        = aws_instance.bastion.public_ip
+  }
+  provisioner "remote-exec" {
+    inline = [
+    "sudo mkdir -p /wibble",
+    "sudo chmod go+rw /wibble",
+    "mountpoint -q /wibble && echo 'Nothing to do' || sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,port=2049 ${aws_efs_file_system.efs.dns_name}:/ /wibble"
+    ]
   }
 }
