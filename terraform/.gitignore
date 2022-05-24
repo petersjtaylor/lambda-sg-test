@@ -4,3 +4,5 @@
 *.hcl
 *.zip
 out.txt
+publicIP.txt
+node.pem

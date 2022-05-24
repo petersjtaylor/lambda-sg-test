@@ -137,7 +137,7 @@ resource "aws_key_pair" "key_pair" {
 
 resource "null_resource" "save_key_pair" {
   provisioner "local-exec" {
-    command = "echo '${tls_private_key.node_key.private_key_pem}' > node.pem"
+    command = "echo '${tls_private_key.node_key.private_key_pem}' > node.pem && chmod 600 node.pem"
   }
 }
 
